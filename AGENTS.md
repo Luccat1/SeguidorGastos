@@ -8,7 +8,7 @@
 ## Dev Environment Tips
 - **Files**:
     - `Code.js`: Contains all the logic (Gmail fetching, regex parsing, Sheet updating).
-    - `Instrucciones.md`: User-facing setup instructions.
+    - `README.md`: User-facing setup instructions.
 - **Syntax**: Standard JavaScript (ES6 supported by GAS).
 - **Libraries**: Uses `GmailApp` and `SpreadsheetApp` global services.
 
