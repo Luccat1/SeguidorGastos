@@ -1,27 +1,48 @@
-# Instrucciones de Instalación
+# 💰 Seguidor de Gastos Automático
 
-1. Abre tu Google Sheet de Gastos.
-2. Ve a **Extensiones** > **Apps Script**.
-3. Reemplaza todo el código existente con el contenido actualizado de `Code.js`.
-4. Guarda el proyecto.
-5. **IMPORTANTE**: Recarga la pestaña de tu Google Sheet (F5 o Cmd+R).
+Bienvenido a tu sistema de control de gastos. Este proyecto conecta tu Gmail con Google Sheets para registrar automáticamente tus compras con tarjeta de crédito.
 
-## ¡Nuevo Menú
+## 🚀 Instalación Rápida
 
-Al recargar la hoja, verás un nuevo menú en la barra superior llamado **"💰 Seguidor Gastos"**.
-Desde ahí puedes ejecutar todo con un clic:
+1.  **Abre tu Hoja de Cálculo**: Donde quieres tener tus gastos.
+2.  **Abre el Editor**: Ve al menú `Extensiones` > `Apps Script`.
+3.  **Copia el Código**: Pega todo el contenido de `Code.js` en el archivo principal del editor, reemplazando lo que haya.
+4.  **Guarda**: Presiona el icono de disquete 💾 o `Ctrl+S`.
+5.  **Recarga**: Vuelve a la pestaña de tu Google Sheet y recarga la página (F5).
 
-* **📥 Traer Gastos de Gmail**: Busca correos nuevos y los añade.
-* **📊 Actualizar Dashboard**: Crea/Actualiza gráficos.
-* **🤖 Generar Análisis IA**: Copia el resumen para Gemini.
-* **🔄 Recategorizar Todo**: Aplica tus reglas a gastos antiguos.
+> Verás aparecer un nuevo menú llamado **"💰 Seguidor Gastos"** en la barra superior pasados unos segundos.
 
-## Configuración Inicial (Solo si es nuevo)
+## 📖 Uso del Menú
 
-1. Usa "Traer Gastos de Gmail" para empezar.
-2. Si faltan categorías, se creará la hoja "Configuracion". Edítala.
-3. Usa "Recategorizar Todo" si cambias reglas.
+El sistema está diseñado para ser manual o automático, pero siempre tienes el control desde el menú:
 
-## Automatización (Triggers)
+*   **📥 Traer Gastos de Gmail**: Escanea tu bandeja de entrada buscando correos nuevos del banco y los añade a la hoja.
+*   **📊 Actualizar Dashboard**: Borra y regenera la pestaña "Dashboard" con gráficos frescos de tus datos actuales.
+*   **🤖 Generar Análisis IA**: Crea un resumen listo para copiar y pegar en ChatGPT/Gemini para que te dé consejos financieros personalizados.
+*   **🔄 Recategorizar Todo**: Si añades nuevas reglas en la hoja `Configuracion` (ej: "Uber" = "Transporte"), usa este botón para que reconozca los gastos antiguos.
 
-*El menú es para uso manual, pero la descarga de correos seguirá siendo automática cada hora si configuraste el Trigger.*
+## ⚙️ Configuración (Categorías)
+En la hoja **Configuracion** puedes definir tus propias reglas.
+*   **Columna A (Palabra Clave)**: Texto que identifica al comercio (ej: "Netflix").
+*   **Columna B (Categoría)**: La categoría a asignar (ej: "Entretenimiento").
+
+El sistema busca la *Palabra Clave* dentro del nombre del comercio del banco.
+
+## ⏰ Automatización (Triggers)
+
+Para que el sistema revise tus correos automáticamente cada hora sin que tengas que presionar nada:
+
+1.  En el editor de Apps Script, haz clic en el icono del **reloj (Activadores)** en la barra lateral izquierda.
+2.  Abajo a la derecha, haz clic en el botón azul **"Añadir activador"**.
+3.  Configura las opciones así:
+    *   **Función a ejecutar**: `procesarGastos`
+    *   **Despliegue**: `Head` (Principal)
+    *   **Fuente del evento**: `Según tiempo`
+    *   **Tipo de activador basado en el tiempo**: `Temporizador por horas`
+    *   **Intervalo**: `Cada hora` (o lo que prefieras)
+4.  Haz clic en **Guardar**.
+
+¡Listo! Ahora tu hoja se actualizará sola.
+
+---
+*Desarrollado con ❤️ y JavaScript.*

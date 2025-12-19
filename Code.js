@@ -1,357 +1,150 @@
 /**
- * Configuración del Script
+ * ============================================================================
+ * 💰 SEGUIDOR DE GASTOS - GOOGLE APPS SCRIPT
+ * ============================================================================
+ * 
+ * Este script automatiza la extracción de gastos desde correos de notificación
+ * bancaria en Gmail y los organiza en una Google Sheet.
+ * 
+ * ¿CÓMO FUNCIONA?
+ * 1. Busca correos específicos en Gmail usando comandos de búsqueda.
+ * 2. Extrae la información clave (Monto, Comercio, Fecha) usando Expresiones Regulares (Regex).
+ * 3. Categoriza automáticamente el gasto según reglas definidas por el usuario.
+ * 4. Guarda todo en una hoja de cálculo y genera reportes.
  */
+
+// --- CONFIGURACIÓN PRINCIPAL ---
+// Centralizamos las variables cambiantes aquí para no tocar el código profundo.
 const CONFIG = {
-    // CAMBIO: Buscamos desde principio de año para el análisis anual real
+    // Filtro de búsqueda de Gmail. 
+    // "from:" limita el remitente, "subject:" el asunto, y "after:" la fecha de inicio.
     SEARCH_QUERY: 'from:enviodigital@bancochile.cl subject:"Compra con Tarjeta de Crédito" after:2025-01-01',
-    SHEET_NAME: 'Gastos', // Nombre de la hoja donde se guardarán los datos
-    CONFIG_SHEET_NAME: 'Configuracion', // Nueva hoja para reglas
+    
+    // Nombres de las hojas en Google Sheets
+    SHEET_NAME: 'Gastos',            // Aquí se guardan los datos procesados
+    CONFIG_SHEET_NAME: 'Configuracion', // Aquí se guardan las reglas de categorías
+    
+    // Encabezados de las columnas. El script los escribirá si la hoja es nueva.
     HEADERS: ['Fecha', 'Comercio', 'Monto', 'Categoría', 'Medio Pago', 'ID Mensaje', 'Texto Original']
 };
 
 /**
- * Trigger que se ejecuta al abrir la hoja de cálculo.
- * Crea un menú personalizado para usar las funciones fácilmente.
+ * ⚙️ CONFIGURACIÓN DEL MENÚ
+ * Se ejecuta automáticamente cuando abres la hoja de cálculo.
+ * Crea un menú personalizado en la barra superior.
  */
 function onOpen() {
     const ui = SpreadsheetApp.getUi();
     ui.createMenu('💰 Seguidor Gastos')
-        .addItem('📥 Traer Gastos de Gmail', 'procesarGastos')
+        .addItem('📥 Traer Gastos de Gmail', 'procesarGastos') // Botón principal
         .addSeparator()
-        .addItem('📊 Actualizar Dashboard', 'crearDashboard')
-        .addItem('🤖 Generar Análisis IA', 'generarResumenParaIA')
+        .addItem('📊 Actualizar Dashboard', 'crearDashboard')   // Genera gráficos
+        .addItem('🤖 Generar Análisis IA', 'generarResumenParaIA') // Ayuda para prompts
         .addSeparator()
-        .addItem('🔄 Recategorizar Todo', 'recategorizarHistorico')
+        .addItem('🔄 Recategorizar Todo', 'recategorizarHistorico') // Mantenimiento
         .addToUi();
 }
 
 /**
- * Función Principal: Busca correos y los procesa
+ * 🚀 FUNCIÓN PRINCIPAL: PROCESAR GASTOS
+ * Esta es la función que orquesta todo el trabajo sucio.
  */
 function procesarGastos() {
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    let sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
-
-    // Crear hoja de Gastos si no existe
-    if (!sheet) {
-        sheet = spreadsheet.insertSheet(CONFIG.SHEET_NAME);
-        sheet.appendRow(CONFIG.HEADERS);
-        // Negrita a los encabezados
-        sheet.getRange(1, 1, 1, CONFIG.HEADERS.length).setFontWeight("bold");
-    }
-
-    // Asegurar que exista la hoja de Configuración
-    ensureConfigSheet(spreadsheet);
-
-    // Obtener reglas de categorización
+    
+    // 1. Preparación de hojas
+    let sheet = getOrCreateSheet(spreadsheet, CONFIG.SHEET_NAME);
+    ensureConfigSheet(spreadsheet); // Nos aseguramos que exista la config
+    
+    // 2. Obtener historial para no duplicar
+    // Leemos los IDs de mensaje ya guardados para ignorarlos si vuelven a aparecer.
+    const processedIds = getProcessedMessageIds(sheet);
+    
+    // 3. Obtener reglas de categorización vigentes
     const rules = getCategorizationRules(spreadsheet);
 
-    // Obtener IDs ya procesados para evitar duplicados
-    // Asumimos que el ID Mensaje está en la columna 6 (índice 5 comenzando de 0, pero getRange usa 1-index)
-    const lastRow = sheet.getLastRow();
-    let processedIds = textToSet([]);
-
-    if (lastRow > 1) {
-        const idColumnValues = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
-        processedIds = textToSet(idColumnValues);
-    }
-
-    // Buscar hilos de correo
+    // 4. Buscar correos en Gmail
+    // GmailApp.search funciona igual que la barra de búsqueda de Gmail.
     const threads = GmailApp.search(CONFIG.SEARCH_QUERY);
     const newRows = [];
+    
+    console.log(`🔍 Hilos encontrados: ${threads.length}`);
 
-    console.log(`Encontrados ${threads.length} hilos correspondientes a la búsqueda.`);
-
+    // 5. Iterar sobre cada hilo y mensaje
     threads.forEach(thread => {
         const messages = thread.getMessages();
         messages.forEach(message => {
             const msgId = message.getId();
 
-            // Si ya procesamos este ID, lo saltamos
-            if (processedIds.has(msgId)) {
-                return;
-            }
+            // Si ya procesamos este ID, lo saltamos inmediatamente. Eficiencia pura.
+            if (processedIds.has(msgId)) return;
 
+            // Extraemos info del cuerpo del correo
             const body = message.getPlainBody();
             const extractedData = extractDataFromEmail(body);
 
             if (extractedData) {
-                // AUTO-CATEGORIZACIÓN
+                // Si logramos extraer datos, intentamos categorizarlos
                 const category = categorizeMerchant(extractedData.merchant, rules);
 
-                // Preparar fila: ['Fecha', 'Comercio', 'Monto', 'Categoría', 'Medio Pago', 'ID Mensaje', 'Texto Original']
+                // Preparamos la fila tal como la espera la hoja de cálculo
                 newRows.push([
                     extractedData.date,
                     extractedData.merchant,
                     extractedData.amount,
-                    category, // Categoría automática o vacía
+                    category, // Categoría automática (o vacía si no hay regla)
                     extractedData.paymentMethod,
                     msgId,
-                    extractedData.originalText // Opcional, para debug
+                    extractedData.originalText // Guardamos esto para depurar si el regex falló sutilmente
                 ]);
             }
         });
     });
 
-    // Escribir nuevos datos en lote
+    // 6. Guardar en lote (Batch Write)
+    // Escribir en la hoja es lento. Es mejor acumular todo en 'newRows' y escribir una sola vez.
     if (newRows.length > 0) {
+        const lastRow = sheet.getLastRow();
+        // getRange(filaInicio, colInicio, numFilas, numCols)
         sheet.getRange(lastRow + 1, 1, newRows.length, CONFIG.HEADERS.length).setValues(newRows);
-        console.log(`Se agregaron ${newRows.length} nuevos gastos.`);
+        console.log(`✅ Se agregaron ${newRows.length} nuevos gastos.`);
     } else {
-        console.log("No se encontraron nuevos gastos.");
+        console.log("✅ No se encontraron nuevos gastos para procesar.");
     }
 }
+
+// ============================================================================
+// 🧠 LÓGICA DE EXTRACCIÓN (REGEX)
+// ============================================================================
 
 /**
- * Crea la hoja de configuración si no existe y añade ejemplos
+ * Analiza el texto del correo para encontrar precios, fechas y nombres.
+ * Utiliza Expresiones Regulares (Regex) para ser flexible ante variantes.
+ * @param {string} body - El contenido texto plano del correo.
+ * @return {Object|null} - Objeto con datos o null si no encuentra nada.
  */
-function ensureConfigSheet(spreadsheet) {
-    let sheet = spreadsheet.getSheetByName(CONFIG.CONFIG_SHEET_NAME);
-    if (!sheet) {
-        sheet = spreadsheet.insertSheet(CONFIG.CONFIG_SHEET_NAME);
-        sheet.appendRow(["Palabra Clave", "Categoría"]);
-        sheet.getRange(1, 1, 1, 2).setFontWeight("bold");
-
-        // Añadir ejemplos por defecto
-        const examples = [
-            ["Uber Trip", "Transporte"],
-            ["Uber Eats", "Comida"],
-            ["Paris", "Tiendas"],
-            ["Jumbo", "Supermercado"],
-            ["Unimarc", "Supermercado"],
-            ["Netflix", "Suscripciones"],
-            ["TUU*CAFETERIAS", "Alimentacion"]
-        ];
-        sheet.getRange(2, 1, examples.length, 2).setValues(examples);
-        console.log("Se creó la hoja de Configuración con ejemplos.");
-    }
-}
-
-/**
- * Lee las reglas de la hoja Configuración
- * Retorna un array de objetos: [{keyword: 'uber', category: 'Transporte'}, ...]
- */
-function getCategorizationRules(spreadsheet) {
-    const sheet = spreadsheet.getSheetByName(CONFIG.CONFIG_SHEET_NAME);
-    if (!sheet || sheet.getLastRow() <= 1) return [];
-
-    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
-    // Filtramos filas vacías y convertimos a minúsculas la keyword para buscar fácil
-    const rules = data
-        .filter(row => row[0] && row[1])
-        .map(row => ({
-            keyword: row[0].toString().toLowerCase(),
-            category: row[1].toString()
-        }));
-
-    // ORDENAR POR LARGO DE KEYWORD (Descendente)
-    // Esto asegura que "Uber Eats" se revise antes que "Uber", evitando falsos positivos.
-    return rules.sort((a, b) => b.keyword.length - a.keyword.length);
-}
-
-/**
- * Busca coincidencia de keyword en el nombre del comercio
- */
-function categorizeMerchant(merchantName, rules) {
-    const lowerMerchant = merchantName.toLowerCase();
-    for (const rule of rules) {
-        if (lowerMerchant.includes(rule.keyword)) {
-            return rule.category;
-        }
-    }
-    return ""; // Sin categoría
-}
-
-/**
- * HERRAMIENTA EXTERNA: Recategorizar todo el historial
- * Ejecuta esto si cambiaste las reglas y quieres actualizar los gastos viejos.
- */
-function recategorizarHistorico() {
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    ensureConfigSheet(spreadsheet); // Por si acaso
-    const rules = getCategorizationRules(spreadsheet);
-
-    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
-    const lastRow = sheet.getLastRow();
-
-    if (lastRow <= 1) {
-        console.log("No hay datos para recategorizar.");
-        return;
-    }
-
-    // Leemos Comercios (Col B -> index 2) y Categorías (Col D -> index 4)
-    // GetRange usa indices base 1.
-    // Columna 2 es B. Columna 4 es D.
-    const range = sheet.getRange(2, 1, lastRow - 1, CONFIG.HEADERS.length);
-    const data = range.getValues();
-    let updatesCount = 0;
-
-    // Índices en el array (base 0): Mercante están en index 1, Categoría en index 3
-    // Ver HEADERS: ['Fecha', 'Comercio', 'Monto', 'Categoría', ...]
-    const IDX_MERCHANT = 1;
-    const IDX_CATEGORY = 3;
-
-    const newData = data.map(row => {
-        const merchant = row[IDX_MERCHANT];
-        const currentCat = row[IDX_CATEGORY];
-
-        // Solo categorizar si está vacío (Opcional: quitar condición para forzar overwrite)
-        if (currentCat === "") {
-            const newCat = categorizeMerchant(merchant, rules);
-            if (newCat) {
-                row[IDX_CATEGORY] = newCat;
-                updatesCount++;
-            }
-        }
-        return row;
-    });
-
-    if (updatesCount > 0) {
-        range.setValues(newData);
-        console.log(`Se actualizaron ${updatesCount} filas con nuevas categorías.`);
-    } else {
-        console.log("No se encontraron filas pendientes de categorización.");
-    }
-}
-
-/**
- * Crea o actualiza la hoja de Dashboard con Análisis Mensual y Anual
- */
-function crearDashboard() {
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    let sheet = spreadsheet.getSheetByName("Dashboard");
-
-    // Si existe la versión antigua o esta misma, la borramos para recrear limpia
-    const oldSheet = spreadsheet.getSheetByName("Resumen Mensual");
-    if (oldSheet) spreadsheet.deleteSheet(oldSheet);
-
-    if (spreadsheet.getSheetByName("Dashboard")) {
-        spreadsheet.deleteSheet(spreadsheet.getSheetByName("Dashboard"));
-    }
-
-    sheet = spreadsheet.insertSheet("Dashboard", 0);
-
-    // --- SECCIÓN 1: CABECERA ---
-    sheet.getRange("A1").setValue("Tablero de Control Financiero").setFontSize(16).setFontWeight("bold");
-    sheet.getRange("A2").setValue("Vista de Evolución Mensual");
-
-    // --- SECCIÓN 2: MATRIZ DE EVOLUCIÓN (Pivot Table via Query) ---
-    // Filas: Año, Mes. Columnas: Categorías. Valores: Suma(Monto)
-    // Query trick: "label month(A)+1 'Mes', year(A) 'Año'" para que sea legible
-    const queryCell = sheet.getRange("A5");
-    // Nota: Usamos Columna+1 para mes porque QUERY devuelve index 0-11
-    const formula = `=QUERY(Gastos!A:E; "SELECT YEAR(A), MONTH(A)+1, SUM(C) WHERE D <> '' GROUP BY YEAR(A), MONTH(A)+1 PIVOT D LABEL YEAR(A) 'Año', MONTH(A)+1 'Mes'"; 1)`;
-    queryCell.setFormula(formula);
-
-    // FIXME: Formatting Bug Fix
-    // 1. Formato Moneda SOLO a los valores (Columna C en adelante aprox)
-    sheet.getRange("C5:Z100").setNumberFormat("$#,##0");
-
-    // 2. Formato Texto/Numero a Año y Mes (Columna A y B) para evitar "$2.025"
-    sheet.getRange("A5:B100").setNumberFormat("0");
-    sheet.getRange("A5:B100").setHorizontalAlignment("center");
-
-    // --- SECCIÓN 3: GRÁFICOS ---
-
-    // 3.1 Gráfico de Barras Apiladas (Evolución)
-    // Intentamos detectar el rango dinámicamente. Asumimos max 12 meses visualizables y 6 categorías.
-    const chartEvolution = sheet.newChart()
-        .asColumnChart()
-        .setStacked()
-        .addRange(sheet.getRange("A5:H18")) // Rango aproximado, incluye Año/Mes + Categorías
-        .setTitle("Evolución de Gastos por Categoría")
-        .setPosition(5, 5, 0, 0) // Posición a la derecha de la tabla (Fila 5, Col E aprox)
-        .build();
-
-    sheet.insertChart(chartEvolution);
-
-    // --- SECCIÓN 4: TOP GASTOS ---
-    sheet.getRange("A25").setValue("Top 5 Gastos Históricos").setFontWeight("bold");
-    sheet.getRange("A26").setFormula(`=QUERY(Gastos!A:E; "SELECT A, B, D, C ORDER BY C DESC LIMIT 5 LABEL A 'Fecha', B 'Comercio', D 'Categoría', C 'Monto'"; 1)`);
-
-    // Format Fecha (Col A) in Top 5 section
-    sheet.getRange("A27:A35").setNumberFormat("dd/MM/yyyy");
-    sheet.getRange("D27:D35").setNumberFormat("$#,##0");
-
-    console.log("Dashboard avanzado creado exitosamente.");
-}
-
-/**
- * Genera un resumen de texto para pegar en Gemini/ChatGPT
- */
-function generarResumenParaIA() {
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
-
-    if (!sheet || sheet.getLastRow() <= 1) {
-        console.log("No hay datos para analizar.");
-        return;
-    }
-
-    // Obtener datos (Fecha, Comercio, Monto, Categoría)
-    // HEADERS: ['Fecha', 'Comercio', 'Monto', 'Categoría', ...]
-    // Indices (base 0): 0, 1, 2, 3
-    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues();
-
-    // Agrupar por Categoría
-    const resumen = {};
-    let total = 0;
-
-    data.forEach(row => {
-        const monto = parseFloat(row[2]) || 0;
-        const cat = row[3] || "Sin Categoría";
-
-        if (!resumen[cat]) resumen[cat] = 0;
-        resumen[cat] += monto;
-        total += monto;
-    });
-
-    // Formatear texto
-    let texto = "Actúa como mi asistentente financiero. Analiza mis gastos de este periodo:\n\n";
-    texto += `Gasto Total: $${total.toLocaleString('es-CL')}\n\n`;
-    texto += "Desglose por Categoría:\n";
-
-    // Ordenar por monto
-    const categoriasOrdenadas = Object.keys(resumen).sort((a, b) => resumen[b] - resumen[a]);
-
-    categoriasOrdenadas.forEach(cat => {
-        const monto = resumen[cat];
-        const porcentaje = ((monto / total) * 100).toFixed(1);
-        texto += `- ${cat}: $${monto.toLocaleString('es-CL')} (${porcentaje}%)\n`;
-    });
-
-    texto += "\nPor favor dime:\n1. ¿Dónde se va la mayor parte de mi presupuesto?\n2. ¿Qué categoría te parece inusualmente alta?\n3. Consejos para reducir gastos en la categoría principal.";
-
-    console.log("--- COPIA EL SIGUIENTE TEXTO ---");
-    console.log(texto);
-    console.log("--------------------------------");
-
-    // Intento de mostrar en alerta (si se ejecuta desde el botón en la hoja, no desde editor)
-    try {
-        SpreadsheetApp.getUi().alert("Copia este texto del log (Ver -> Registros):", texto, SpreadsheetApp.getUi().ButtonSet.OK);
-    } catch (e) {
-        // Si corre desde el editor, no hay UI, solo log.
-    }
-}
 function extractDataFromEmail(body) {
-    // Regex más flexible:
-    // 1. \s+ en lugar de espacios para aceptar saltos de línea.
-    // 2. ([\s\S]+?) para el comercio por si tiene saltos de línea.
+    // Regex desglosado:
+    // 1. "compra por $" -> ancla de inicio
+    // 2. ([\d.]+) -> Captura el monto (dígitos y puntos). Grupo 1.
+    // 3. "con Tarjeta... ****" -> Texto intermedio
+    // 4. (\d{4}) -> Captura últimos 4 dígitos tarjeta. Grupo 2.
+    // 5. "en" ... ([\s\S]+?) ... "el" -> Captura el comercio de forma no agresiva. Grupo 3.
+    // 6. Fechas y horas al final. Grupos 4 y 5.
     const regex = /compra\s+por\s+\$([\d.]+)\s+con\s+Tarjeta\s+de\s+Crédito\s+\*\*\*\*(\d{4})\s+en\s+([\s\S]+?)\s+el\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/i;
+    
     const match = body.match(regex);
 
-    if (!match) {
-        // Debug: Descomenta la siguiente línea si quieres ver por qué falla en los logs
-        // console.log("Falló regex en cuerpo: " + body.substring(0, 100) + "...");
-        return null;
-    }
+    if (!match) return null; // Si no calza el patrón, no es un correo válido.
 
+    // Extraemos los grupos capturados
     const rawAmount = match[1];
     const cardLast4 = match[2];
-    const merchant = match[3].trim().replace(/\n/g, ' '); // Limpiar saltos de línea del nombre
+    const merchant = match[3].trim().replace(/\n/g, ' '); // Limpiamos saltos de línea del nombre
     const dateStr = match[4];
     const timeStr = match[5];
 
+    // Convertimos "19.990" (string) a 19990 (número) para poder sumar después
     const amount = parseFloat(rawAmount.replace(/\./g, ''));
 
     return {
@@ -363,68 +156,262 @@ function extractDataFromEmail(body) {
     };
 }
 
-/**
- * FUNCIÓN DE DIAGNÓSTICO
- * Ejecuta esta función si 'procesarGastos' dice que no encuentra nada.
- * Te mostrará en los registros exactamente cómo Apps Script "ve" el correo.
- */
-function debugEmails() {
-    const threads = GmailApp.search(CONFIG.SEARCH_QUERY, 0, 3); // Solo primeros 3 hilos
-    console.log(`Debug: Encontrados ${threads.length} hilos.`);
+// ============================================================================
+// 🏷️ CATEGORIZACIÓN
+// ============================================================================
 
-    if (threads.length === 0) {
-        console.log("No se encontraron correos con ese criterio.");
-        return;
+/**
+ * Asigna una categoría basándose en palabras clave.
+ * @param {string} merchantName - El nombre del comercio (ej: "UBER EATS HELADOS").
+ * @param {Array} rules - Lista de reglas [{keyword: 'uber', category: 'Transporte'}].
+ */
+function categorizeMerchant(merchantName, rules) {
+    if (!merchantName) return "";
+    const lowerMerchant = merchantName.toLowerCase();
+    
+    for (const rule of rules) {
+        // Simplemente chequeamos si la palabra clave está dentro del nombre del comercio
+        if (lowerMerchant.includes(rule.keyword)) {
+            return rule.category;
+        }
     }
-
-    const messages = threads[0].getMessages();
-    const body = messages[0].getPlainBody();
-
-    console.log("--- INICIO CUERPO ---");
-    console.log(body);
-    console.log("--- FIN CUERPO ---");
-
-    const extract = extractDataFromEmail(body);
-    console.log("Intento de extracción:", extract);
+    return ""; // Si no hay coincidencias, devolvemos vacío para llenar manual después.
 }
 
 /**
- * Helper: Convierte array de arrays a Set para búsqueda rápida
+ * Lee las reglas definidas por el usuario en la hoja "Configuracion".
+ * Ordena las reglas por longitud para que las más específicas tengan prioridad 
+ * (Ej: "Uber Eats" antes que "Uber").
  */
-function textToSet(values) {
-    const set = new Set();
-    values.forEach(row => {
-        if (row[0]) set.add(row[0].toString());
+function getCategorizationRules(spreadsheet) {
+    const sheet = spreadsheet.getSheetByName(CONFIG.CONFIG_SHEET_NAME);
+    if (!sheet || sheet.getLastRow() <= 1) return [];
+
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+    
+    return data
+        .filter(row => row[0] && row[1]) // Filtrar filas vacías
+        .map(row => ({
+            keyword: row[0].toString().toLowerCase(),
+            category: row[1].toString()
+        }))
+        .sort((a, b) => b.keyword.length - a.keyword.length); // Ordenar por especificidad
+}
+
+// ============================================================================
+// 📊 DASHBOARD Y GRÁFICOS
+// ============================================================================
+
+/**
+ * Genera un Dashboard usando QUERY (lenguaje estilo SQL de Google Sheets)
+ * y gráficos nativos. Es destructiva: borra el dashboard anterior y lo hace de nuevo.
+ */
+function crearDashboard() {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Limpieza de hojas antiguas
+    const oldSummary = spreadsheet.getSheetByName("Resumen Mensual");
+    if (oldSummary) spreadsheet.deleteSheet(oldSummary);
+    
+    let sheet = spreadsheet.getSheetByName("Dashboard");
+    if (sheet) spreadsheet.deleteSheet(sheet);
+    
+    // Crear hoja nueva al principio (posición 0)
+    sheet = spreadsheet.insertSheet("Dashboard", 0);
+
+    // Título
+    sheet.getRange("A1").setValue("Tablero de Control Financiero").setFontSize(16).setFontWeight("bold");
+    sheet.getRange("A2").setValue("Vista de Evolución Mensual");
+
+    // --- TABLA DINÁMICA CON FORMULA QUERY ---
+    // Usamos QUERY porque es potente y dinámico.
+    // Agrupa por Año y Mes, pivota por Categoría, y suma los Costos (Columna C).
+    const queryCell = sheet.getRange("A5");
+    const formula = `=QUERY(Gastos!A:E; "SELECT YEAR(A), MONTH(A)+1, SUM(C) WHERE D <> '' GROUP BY YEAR(A), MONTH(A)+1 PIVOT D LABEL YEAR(A) 'Año', MONTH(A)+1 'Mes'"; 1)`;
+    queryCell.setFormula(formula);
+
+    // Formateo visual de la tabla generada
+    sheet.getRange("C5:Z100").setNumberFormat("$#,##0"); // Formato Dinero
+    sheet.getRange("A5:B100").setHorizontalAlignment("center"); // Centrar Fechas
+
+    // --- GRÁFICO ---
+    const chart = sheet.newChart()
+        .asColumnChart()
+        .setStacked()
+        .addRange(sheet.getRange("A5:H15")) // Rango estimado
+        .setTitle("Evolución de Gastos por Categoría")
+        .setPosition(5, 5, 0, 0) // Posición visual
+        .build();
+    sheet.insertChart(chart);
+
+    // --- TOP GASTOS ---
+    sheet.getRange("A25").setValue("Top 5 Gastos Históricos").setFontWeight("bold");
+    sheet.getRange("A26").setFormula(`=QUERY(Gastos!A:E; "SELECT A, B, D, C ORDER BY C DESC LIMIT 5 LABEL A 'Fecha', B 'Comercio', D 'Categoría', C 'Monto'"; 1)`);
+    
+    // Ajuste formatos para Top Gastos
+    sheet.getRange("A27:A35").setNumberFormat("dd/MM/yyyy");
+    sheet.getRange("D27:D35").setNumberFormat("$#,##0");
+}
+
+/**
+ * Genera un prompt estructurado para copiar y pegar en una IA (ChatGPT/Gemini).
+ * Analiza porcentajes de gasto y pide consejos.
+ */
+function generarResumenParaIA() {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
+    if (!sheet || sheet.getLastRow() <= 1) return;
+
+    // Obtenemos solo datos relevantes (Col 0 a 3: Fecha, Comercio, Monto, Categoria)
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues();
+
+    // Sumarización en memoria
+    const resumen = {};
+    let grandTotal = 0;
+
+    data.forEach(row => {
+        const monto = parseFloat(row[2]) || 0; // Columna 2 es Monto
+        const cat = row[3] || "Sin Categoría"; // Columna 3 es Categoría
+        if (!resumen[cat]) resumen[cat] = 0;
+        resumen[cat] += monto;
+        grandTotal += monto;
     });
-    return set;
+
+    // Construcción del Prompt
+    let prompt = "Actúa como mi asesor financiero personal. Aquí está el desglose de mis gastos recientes:\n\n";
+    prompt += `Gasto Total: $${grandTotal.toLocaleString('es-CL')}\n\n`;
+    
+    // Ordenamos categorías por mayor gasto
+    Object.keys(resumen)
+        .sort((a, b) => resumen[b] - resumen[a])
+        .forEach(cat => {
+            const monto = resumen[cat];
+            const pct = ((monto / grandTotal) * 100).toFixed(1);
+            prompt += `- ${cat}: $${monto.toLocaleString('es-CL')} (${pct}%)\n`;
+        });
+
+    prompt += "\nPor favor responde:\n1. ¿Cuál es la anomalía más grande en mi presupuesto?\n2. Dame 3 consejos concretos para reducir la categoría principal.\n3. ¿Mi distribución de gastos parece saludable?";
+
+    // Mostrar al usuario
+    console.log("📝 --- COPIA ESTE PROMPT PARA TU IA ---");
+    console.log(prompt);
+    console.log("📝 ------------------------------------");
+    
+    try {
+        SpreadsheetApp.getUi().alert("Prompt generado en Registros (Logs). Copialo desde Ver -> Ejecuciones.");
+    } catch (e) { /* Sin UI disponible */ }
+}
+
+// ============================================================================
+// 🛠️ HERRAMIENTAS Y UTILIDADES (HELPERS)
+// ============================================================================
+
+/**
+ * Función helper para obtener los IDs ya procesados.
+ * Esto evita duplicados y hace el script idempotente.
+ */
+function getProcessedMessageIds(sheet) {
+    const lastRow = sheet.getLastRow();
+    // Asumimos que ID Mensaje es la columna 6 (índice 5 en getRange, pero la fila 5 en array... espera)
+    // HEADERS: [..., 'ID Mensaje' (index 5)] -> Columna F (6)
+    if (lastRow <= 1) return new Set();
+    
+    // getRange(fila, col). Column 6 = F.
+    const data = sheet.getRange(2, 6, lastRow - 1, 1).getValues(); 
+    return new Set(data.map(r => r[0].toString()));
 }
 
 /**
- * FUNCIÓN DE PRUEBA
- * Ejecuta esto para verificar que el regex funciona con tus ejemplos
+ * Asegura que exista la hoja con encabezados correctos.
  */
-function testRegex() {
-    const examples = [
-        `Luciano Andre Cataldo Alvarado:
-Te informamos que se ha realizado una compra por $19.790 con Tarjeta de Crédito ****0990 en PARIS VINA DEL MAR VINA DEL MAR CL el 13/12/2025 17:01.
-Revisa Saldos y Movimientos en App Mi Banco o Banco en Línea.`,
+function getOrCreateSheet(spreadsheet, name) {
+    let sheet = spreadsheet.getSheetByName(name);
+    if (!sheet) {
+        sheet = spreadsheet.insertSheet(name);
+        sheet.appendRow(CONFIG.HEADERS);
+        sheet.getRange(1, 1, 1, CONFIG.HEADERS.length).setFontWeight("bold");
+    }
+    return sheet;
+}
 
-        `Te informamos que se ha realizado una compra por $10.605 con Tarjeta de Crédito ****0990 en PAYU *UBER TRIP SANTIAGO CL el 13/12/2025 17:52.`,
+/**
+ * Crea la hoja de configuración por defecto si no existe.
+ */
+function ensureConfigSheet(spreadsheet) {
+    if (!spreadsheet.getSheetByName(CONFIG.CONFIG_SHEET_NAME)) {
+        const sheet = spreadsheet.insertSheet(CONFIG.CONFIG_SHEET_NAME);
+        sheet.appendRow(["Palabra Clave", "Categoría"]); // Headers
+        sheet.getRange("A1:B1").setFontWeight("bold");
+        
+        // Datos seed (semilla)
+        sheet.getRange(2, 1, 5, 2).setValues([
+            ["Uber", "Transporte"],
+            ["Jumbo", "Supermercado"],
+            ["Netflix", "Suscripciones"],
+            ["Paris", "Tiendas"],
+            ["Starbucks", "Café"]
+        ]);
+    }
+}
 
-        `Te informamos que se ha realizado una compra por $20.531 con Tarjeta de Crédito ****0990 en PAYU *UBER TRIP SANTIAGO CL el 13/12/2025 20:07.`
-    ];
-
-    console.log("Iniciando pruebas de Regex...");
-
-    examples.forEach((example, index) => {
-        const result = extractDataFromEmail(example);
-        console.log(`Ejemplo ${index + 1}:`);
-        if (result) {
-            console.log(`  - Comercio: ${result.merchant}`);
-            console.log(`  - Monto: ${result.amount}`);
-            console.log(`  - Fecha: ${result.date}`);
-        } else {
-            console.error("  - NO SE ENCONTRÓ COINCIDENCIA");
+/**
+ * Mantenimiento: Vuelve a pasar reglas a todo el historial.
+ * Útil cuando agregas nuevas reglas y quieres aplicarlas "hacia atrás".
+ */
+function recategorizarHistorico() {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
+    if (!sheet) return;
+    
+    const rules = getCategorizationRules(SpreadsheetApp.getActiveSpreadsheet());
+    const dataRange = sheet.getRange(2, 1, sheet.getLastRow() - 1, CONFIG.HEADERS.length);
+    const data = dataRange.getValues();
+    
+    let changes = 0;
+    data.forEach(row => {
+        // Index 1: Comercio, Index 3: Categoría
+        if (row[3] === "") { // Solo rellenar si está vacío
+            const cat = categorizeMerchant(row[1], rules);
+            if (cat) {
+                row[3] = cat;
+                changes++;
+            }
         }
     });
+
+    if (changes > 0) {
+        dataRange.setValues(data);
+        console.log(`✅ Recategorización terminada. ${changes} filas actualizadas.`);
+    } else {
+        console.log("No se requirieron cambios.");
+    }
+}
+
+// ============================================================================
+// 🧪 ZONA DE PRUEBAS Y DEBUG
+// Uso exclusivo para desarrollo. No se usa en producción automática.
+// ============================================================================
+
+/**
+ * Ejecuta esto para ver en consola cómo ve el script los últimos 3 correos reales.
+ */
+function debugEmails() {
+    const threads = GmailApp.search(CONFIG.SEARCH_QUERY, 0, 3);
+    if (threads.length === 0) return console.log("No se encontraron correos.");
+    
+    console.log("--- DEBUG CORREO REAL ---");
+    const body = threads[0].getMessages()[0].getPlainBody();
+    console.log(body.substring(0, 500) + "..."); // Solo primeros 500 chars
+    console.log("--- EXTRACCIÓN ---");
+    console.log(extractDataFromEmail(body));
+}
+
+/**
+ * Prueba local del Regex con ejemplos estáticos.
+ */
+function testRegex() {
+    const testCases = [
+        `Te informamos que se ha realizado una compra por $10.605 con Tarjeta de Crédito ****0990 en PAYU *UBER TRIP SANTIAGO CL el 13/12/2025 17:52.`
+    ];
+    
+    testCases.forEach(t => console.log(extractDataFromEmail(t)));
 }
